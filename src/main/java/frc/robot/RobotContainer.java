@@ -1,8 +1,13 @@
 package frc.robot;
 
 import edu.wpi.first.wpilibj.Notifier;
+import edu.wpi.first.wpilibj.XboxController.Button;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
+import frc.robot.commands.drivetrain.ManualDriveCommand;
+import frc.robot.commands.drivetrain.ToggleReverseCommand;
+import frc.robot.commands.drivetrain.ToggleSlowTurnCommand;
+import frc.robot.subsystems.Drivetrain;
 import frc.robot.subsystems.SnailSubsystem;
 import frc.robot.util.SnailController;
 
@@ -24,6 +29,7 @@ public class RobotContainer {
     private SnailController operatorController;
     
     private ArrayList<SnailSubsystem> subsystems;
+    private Drivetrain drivetrain;
 
     private Notifier updateNotifier;
     private int outputCounter;
@@ -51,17 +57,20 @@ public class RobotContainer {
      * Declare all of our subsystems and their default bindings
      */
     private void configureSubsystems() {
-        // declare each of the subsystems here
+        drivetrain = new Drivetrain();
+        drivetrain.setDefaultCommand(new ManualDriveCommand(drivetrain, driveController::getDriveForward,
+            driveController::getDriveTurn));
 
         subsystems = new ArrayList<>();
-        // add each of the subsystems to the arraylist here
+        subsystems.add(drivetrain);
     }
 
     /**
      * Define button -> command mappings.
      */
     private void configureButtonBindings() {
-        
+        driveController.getButton(Button.kY.value).whenPressed(new ToggleReverseCommand(drivetrain));
+        driveController.getButton(Button.kX.value).whenPressed(new ToggleSlowTurnCommand(drivetrain));
     }
 
     /**
