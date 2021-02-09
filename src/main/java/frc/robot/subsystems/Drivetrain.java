@@ -1,10 +1,15 @@
 package frc.robot.subsystems;
 
 import com.revrobotics.CANEncoder;
+import com.revrobotics.CANPIDController;
 import com.revrobotics.CANSparkMax;
+import com.revrobotics.ControlType;
 import com.revrobotics.CANSparkMax.IdleMode;
 import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 
+import edu.wpi.first.wpilibj.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj.kinematics.DifferentialDriveKinematics;
+import edu.wpi.first.wpilibj.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import frc.robot.util.ArcadeDrive;
 import frc.robot.util.Gyro;
@@ -22,6 +27,11 @@ public class Drivetrain extends SnailSubsystem {
     
     private CANEncoder leftEncoder;
     private CANEncoder rightEncoder;
+
+    private CANPIDController leftPIDController;
+    private CANPIDController rightPIDController;
+
+    private DifferentialDriveKinematics driveKinematics;
 
     /**
      * MANUAL_DRIVE - uses joystick inputs as direct inputs into an arcade drive setup
@@ -50,6 +60,10 @@ public class Drivetrain extends SnailSubsystem {
     public Drivetrain() {
         configureMotors();
         configureEncoders();
+        configurePID();
+
+        driveKinematics = new DifferentialDriveKinematics(DRIVE_TRACK_WIDTH_M);
+
         reset();
     }
 
@@ -93,6 +107,17 @@ public class Drivetrain extends SnailSubsystem {
         rightEncoder.setPosition(0);
     }
 
+    // configure all PID settings on the motors
+    private void configurePID() {
+        leftPIDController = frontLeftMotor.getPIDController();
+        rightPIDController = frontRightMotor.getPIDController();
+
+        leftPIDController.setP(DRIVE_VEL_LEFT_P);
+        leftPIDController.setFF(DRIVE_VEL_LEFT_F);
+        rightPIDController.setP(DRIVE_VEL_RIGHT_P);
+        rightPIDController.setFF(DRIVE_VEL_RIGHT_F);
+    }
+
     public void reset() {
         state = defaultState;
         reverseEnabled = false;
@@ -101,8 +126,9 @@ public class Drivetrain extends SnailSubsystem {
 
     @Override
     public void update() {
+        // we use brackets in this switch statement to define a local scope
         switch(state) {
-            case MANUAL_DRIVE:
+            case MANUAL_DRIVE: {
                 double adjustedSpeedForward = reverseEnabled ? -speedForward : speedForward;
                 double adjustedSpeedTurn = slowTurnEnabled ? speedTurn * DRIVE_SLOW_TURN_MULT : speedTurn;
 
@@ -110,17 +136,40 @@ public class Drivetrain extends SnailSubsystem {
                 frontLeftMotor.set(arcadeSpeeds[0]);
                 frontRightMotor.set(arcadeSpeeds[1]);
                 break;
-            case VELOCITY_DRIVE:
+            }
+            case VELOCITY_DRIVE: {
+                double adjustedSpeedForward = reverseEnabled ? -speedForward : speedForward;
+                double adjustedSpeedTurn = slowTurnEnabled ? speedTurn * DRIVE_SLOW_TURN_MULT : speedTurn;
+
+                // apply negative sign to turn speed because WPILib uses left as positive
+                ChassisSpeeds chassisSpeeds = new ChassisSpeeds(adjustedSpeedForward, 0, -adjustedSpeedTurn);
+                DifferentialDriveWheelSpeeds driveSpeeds = driveKinematics.toWheelSpeeds(chassisSpeeds);
+
+                leftPIDController.setReference(driveSpeeds.leftMetersPerSecond, ControlType.kVelocity);
+                rightPIDController.setReference(driveSpeeds.rightMetersPerSecond, ControlType.kVelocity);
                 break;
+            }
         }
     }
 
     // speeds should be between -1.0 and 1.0 and should NOT be squared before being passed in
+    // speedForward: -1 = backward, +1 = forward
+    // speedTurn: -1 = ccw, +1 = cw
     public void manualDrive(double speedForward, double speedTurn) {
         this.speedForward = speedForward;
         this.speedTurn = speedTurn;
 
         state = State.MANUAL_DRIVE;
+    }
+
+    // speeds should be between in real life units
+    // speedForward: - = backward, + = forward
+    // speedTurn: - = ccw, + = cw
+    public void velocityDrive(double speedForward, double speedTurn) {
+        this.speedForward = speedForward;
+        this.speedTurn = -speedTurn;
+
+        state = State.VELOCITY_DRIVE;
     }
     
     // toggles reverse drive

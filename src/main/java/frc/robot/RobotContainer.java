@@ -7,6 +7,7 @@ import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.commands.drivetrain.ManualDriveCommand;
 import frc.robot.commands.drivetrain.ToggleReverseCommand;
 import frc.robot.commands.drivetrain.ToggleSlowTurnCommand;
+import frc.robot.commands.drivetrain.VelocityDriveCommand;
 import frc.robot.subsystems.Drivetrain;
 import frc.robot.subsystems.SnailSubsystem;
 import frc.robot.util.SnailController;
@@ -60,6 +61,8 @@ public class RobotContainer {
         drivetrain = new Drivetrain();
         drivetrain.setDefaultCommand(new ManualDriveCommand(drivetrain, driveController::getDriveForward,
             driveController::getDriveTurn));
+        // drivetrain.setDefaultCommand(new VelocityDriveCommand(drivetrain, driveController::getDriveForward,
+        //     driveController::getDriveTurn));
 
         subsystems = new ArrayList<>();
         subsystems.add(drivetrain);
