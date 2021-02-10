@@ -2,6 +2,11 @@ package frc.robot.util;
 
 public class ArcadeDrive {
 
+    // utility class
+    private ArcadeDrive() {
+
+    }
+
     // Code adapted from WPILib's DifferentialDrive
     public static double[] arcadeDrive(double speedForward, double speedTurn) {
         double forward = Math.copySign(speedForward * speedForward, speedForward);

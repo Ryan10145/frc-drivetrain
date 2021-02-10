@@ -7,10 +7,12 @@ import com.revrobotics.ControlType;
 import com.revrobotics.CANSparkMax.IdleMode;
 import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 
+import edu.wpi.first.wpilibj.controller.PIDController;
 import edu.wpi.first.wpilibj.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.kinematics.DifferentialDriveKinematics;
 import edu.wpi.first.wpilibj.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpiutil.math.MathUtil;
 import frc.robot.util.ArcadeDrive;
 import frc.robot.util.Gyro;
 
@@ -31,15 +33,23 @@ public class Drivetrain extends SnailSubsystem {
     private CANPIDController leftPIDController;
     private CANPIDController rightPIDController;
 
+    private PIDController distancePIDController;
+    private PIDController anglePIDController;
+
     private DifferentialDriveKinematics driveKinematics;
 
     /**
      * MANUAL_DRIVE - uses joystick inputs as direct inputs into an arcade drive setup
      * VELOCITY_DRIVE - linearly converts joystick inputs into real world values and achieves them with velocity PID
+     * DRIVE_DIST - uses position PID on distance and kP on angle to drive in a straight line a certain distance
+     * TURN_ANGLE - uses position PID on angle to turn to a specific angle
      */
     public enum State {
         MANUAL_DRIVE,
-        VELOCITY_DRIVE
+        VELOCITY_DRIVE,
+        DRIVE_DIST,
+        TURN_ANGLE,
+        DRIVE_DIST_PROFILE
     }
     private final State defaultState = State.MANUAL_DRIVE;
     private State state = defaultState;
@@ -50,6 +60,13 @@ public class Drivetrain extends SnailSubsystem {
      */
     private double speedForward;
     private double speedTurn;
+    
+    
+    private double distSetpoint; // current distance setpoint in meters
+    private double angleSetpoint; // current angle setpoint in deg
+
+    // default value for when the setpoint is not set. Deliberately set low to avoid skewing graphs
+    private final double defaultSetpoint = -1.257;
 
     // if enabled, switches the front and back of the robot from the driving perspective
     private boolean reverseEnabled;
@@ -109,6 +126,7 @@ public class Drivetrain extends SnailSubsystem {
 
     // configure all PID settings on the motors
     private void configurePID() {
+        // configure velocity PID controllers
         leftPIDController = frontLeftMotor.getPIDController();
         rightPIDController = frontRightMotor.getPIDController();
 
@@ -116,12 +134,23 @@ public class Drivetrain extends SnailSubsystem {
         leftPIDController.setFF(DRIVE_VEL_LEFT_F);
         rightPIDController.setP(DRIVE_VEL_RIGHT_P);
         rightPIDController.setFF(DRIVE_VEL_RIGHT_F);
+
+        // configure drive distance PID controllers
+        distancePIDController = new PIDController(DRIVE_DIST_PID[0], DRIVE_DIST_PID[1], DRIVE_DIST_PID[2], UPDATE_PERIOD);
+        distancePIDController.setTolerance(DRIVE_DIST_TOLERANCE); // TODO Look into velocity tolerance as well
+
+        // configure turn angle PID controllers
+        anglePIDController = new PIDController(DRIVE_ANGLE_PID[0], DRIVE_ANGLE_PID[1], DRIVE_ANGLE_PID[2], UPDATE_PERIOD);
+        anglePIDController.setTolerance(DRIVE_ANGLE_TOLERANCE); // TODO Look into velocity tolerance as well
+        anglePIDController.enableContinuousInput(-180.0, 180.0);
     }
 
     public void reset() {
         state = defaultState;
         reverseEnabled = false;
         slowTurnEnabled = false;
+        distSetpoint = defaultSetpoint;
+        angleSetpoint = defaultSetpoint;
     }
 
     @Override
@@ -149,6 +178,55 @@ public class Drivetrain extends SnailSubsystem {
                 rightPIDController.setReference(driveSpeeds.rightMetersPerSecond, ControlType.kVelocity);
                 break;
             }
+            case DRIVE_DIST: {
+                if(distSetpoint == defaultSetpoint || angleSetpoint == defaultSetpoint) {
+                    state = defaultState;
+                    break;
+                }
+
+                // comment this out while initially tuning
+                if(distancePIDController.atSetpoint()) {
+                    state = defaultState;
+                    distSetpoint = defaultSetpoint;
+                    angleSetpoint = defaultSetpoint;
+                    break;
+                }
+
+                double forwardOutput = distancePIDController.calculate(leftEncoder.getPosition(), distSetpoint);
+                forwardOutput = MathUtil.clamp(forwardOutput, -DRIVE_DIST_MAX_OUTPUT, DRIVE_DIST_MAX_OUTPUT);
+                double turnOutput = (angleSetpoint - Gyro.getInstance().getRobotAngle()) * DRIVE_DIST_ANGLE_P;
+
+                double[] arcadeSpeeds = ArcadeDrive.arcadeDrive(forwardOutput, turnOutput);
+                frontLeftMotor.set(arcadeSpeeds[0]);
+                frontRightMotor.set(arcadeSpeeds[1]);
+                break;
+            }
+            case TURN_ANGLE: {
+                if(angleSetpoint == defaultSetpoint) {
+                    state = defaultState;
+                    break;
+                }
+
+                // comment this out while initially tuning
+                if(anglePIDController.atSetpoint()) {
+                    state = defaultState;
+                    angleSetpoint = defaultSetpoint;
+                    break;
+                }
+
+                double turnOutput = anglePIDController.calculate(Gyro.getInstance().getRobotAngle(), angleSetpoint);
+                turnOutput = MathUtil.clamp(turnOutput, -DRIVE_ANGLE_MAX_OUTPUT, DRIVE_ANGLE_MAX_OUTPUT);
+
+                double[] arcadeSpeeds = ArcadeDrive.arcadeDrive(0, turnOutput);
+                frontLeftMotor.set(arcadeSpeeds[0]);
+                frontRightMotor.set(arcadeSpeeds[1]);
+                break;
+            }
+            case DRIVE_DIST_PROFILE: {
+                break;
+            }
+            default:
+                break;
         }
     }
 
@@ -170,6 +248,27 @@ public class Drivetrain extends SnailSubsystem {
         this.speedTurn = -speedTurn;
 
         state = State.VELOCITY_DRIVE;
+    }
+
+    public void driveDistance(double distance) {
+        leftEncoder.setPosition(0);
+        rightEncoder.setPosition(0);
+        Gyro.getInstance().zeroRobotAngle();
+        
+        this.distSetpoint = distance;
+        this.angleSetpoint = 0;
+        distancePIDController.reset();
+
+        state = State.DRIVE_DIST;
+    }
+
+    public void turnAngle(double angle) {
+        Gyro.getInstance().zeroRobotAngle();
+
+        this.angleSetpoint = angle;
+        anglePIDController.reset();
+
+        state = State.TURN_ANGLE;
     }
     
     // toggles reverse drive
@@ -248,16 +347,49 @@ public class Drivetrain extends SnailSubsystem {
         DRIVE_DIST_PID[2] = SmartDashboard.getNumber("Drive Dist kD", DRIVE_DIST_PID[2]);
         DRIVE_DIST_ANGLE_P = SmartDashboard.getNumber("Drive Dist Angle kP", DRIVE_DIST_ANGLE_P);
         DRIVE_DIST_MAX_OUTPUT = SmartDashboard.getNumber("Drive Dist Max Output", DRIVE_DIST_MAX_OUTPUT);
+        
+        if(distancePIDController.getP() != DRIVE_DIST_PID[0]) {
+            distancePIDController.setP(DRIVE_DIST_PID[0]);
+        }
+        if(distancePIDController.getI() != DRIVE_DIST_PID[1]) {
+            distancePIDController.setI(DRIVE_DIST_PID[1]);
+        }
+        if(distancePIDController.getD() != DRIVE_DIST_PID[2]) {
+            distancePIDController.setD(DRIVE_DIST_PID[2]);
+        }
 
         DRIVE_ANGLE_PID[0] = SmartDashboard.getNumber("Drive Angle kP", DRIVE_ANGLE_PID[0]);
         DRIVE_ANGLE_PID[1] = SmartDashboard.getNumber("Drive Angle kI", DRIVE_ANGLE_PID[1]);
         DRIVE_ANGLE_PID[2] = SmartDashboard.getNumber("Drive Angle kD", DRIVE_ANGLE_PID[2]);
         DRIVE_ANGLE_MAX_OUTPUT = SmartDashboard.getNumber("Drive Angle Max Output", DRIVE_ANGLE_MAX_OUTPUT);
         
+        if(anglePIDController.getP() != DRIVE_ANGLE_PID[0]) {
+            anglePIDController.setP(DRIVE_ANGLE_PID[0]);
+        }
+        if(anglePIDController.getI() != DRIVE_ANGLE_PID[1]) {
+            anglePIDController.setI(DRIVE_ANGLE_PID[1]);
+        }
+        if(anglePIDController.getD() != DRIVE_ANGLE_PID[2]) {
+            anglePIDController.setD(DRIVE_ANGLE_PID[2]);
+        }
+        
         DRIVE_VEL_LEFT_P = SmartDashboard.getNumber("Drive Vel Left kP", DRIVE_VEL_LEFT_P);
         DRIVE_VEL_LEFT_F = SmartDashboard.getNumber("Drive Vel Left kFF", DRIVE_VEL_LEFT_F);
         DRIVE_VEL_RIGHT_P = SmartDashboard.getNumber("Drive Vel Right kP", DRIVE_VEL_RIGHT_P);
         DRIVE_VEL_RIGHT_F = SmartDashboard.getNumber("Drive Vel Right kFF", DRIVE_VEL_RIGHT_F);
+
+        if(leftPIDController.getP() != DRIVE_VEL_LEFT_P) {
+            leftPIDController.setP(DRIVE_VEL_LEFT_P);
+        }
+        if(leftPIDController.getFF() != DRIVE_VEL_LEFT_F) {
+            leftPIDController.setFF(DRIVE_VEL_LEFT_F);
+        }
+        if(rightPIDController.getP() != DRIVE_VEL_RIGHT_P) {
+            rightPIDController.setP(DRIVE_VEL_RIGHT_P);
+        }
+        if(rightPIDController.getFF() != DRIVE_VEL_RIGHT_F) {
+            rightPIDController.setFF(DRIVE_VEL_RIGHT_F);
+        }
 
         DRIVE_PROFILE_LEFT_P = SmartDashboard.getNumber("Drive Profile Left kP", DRIVE_PROFILE_LEFT_P);
         DRIVE_PROFILE_RIGHT_P = SmartDashboard.getNumber("Drive Profile Right kP", DRIVE_PROFILE_RIGHT_P);
