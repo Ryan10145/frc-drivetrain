@@ -58,6 +58,7 @@ public final class Constants {
         public static double DRIVE_ANGLE_MAX_OUTPUT = 0.5;
 
         // velocity PID (for closed loop, profiling, and trajectory)
+        public static int DRIVE_VEL_SLOT = 0;
         public static double DRIVE_VEL_LEFT_P = 0.25;
         public static double DRIVE_VEL_LEFT_F = 0.25;
         public static double DRIVE_VEL_RIGHT_P = 0.25;

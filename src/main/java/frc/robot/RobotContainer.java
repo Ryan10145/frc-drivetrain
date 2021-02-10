@@ -4,9 +4,12 @@ import edu.wpi.first.wpilibj.Notifier;
 import edu.wpi.first.wpilibj.XboxController.Button;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
+import frc.robot.commands.drivetrain.DriveDistanceCommand;
+import frc.robot.commands.drivetrain.DriveDistanceProfiledCommand;
 import frc.robot.commands.drivetrain.ManualDriveCommand;
 import frc.robot.commands.drivetrain.ToggleReverseCommand;
 import frc.robot.commands.drivetrain.ToggleSlowTurnCommand;
+import frc.robot.commands.drivetrain.TurnAngleCommand;
 import frc.robot.commands.drivetrain.VelocityDriveCommand;
 import frc.robot.subsystems.Drivetrain;
 import frc.robot.subsystems.SnailSubsystem;
@@ -72,8 +75,12 @@ public class RobotContainer {
      * Define button -> command mappings.
      */
     private void configureButtonBindings() {
-        driveController.getButton(Button.kY.value).whenPressed(new ToggleReverseCommand(drivetrain));
-        driveController.getButton(Button.kX.value).whenPressed(new ToggleSlowTurnCommand(drivetrain));
+        driveController.getButton(Button.kStart.value).whenPressed(new ToggleReverseCommand(drivetrain));
+        driveController.getButton(Button.kBack.value).whenPressed(new ToggleSlowTurnCommand(drivetrain));
+
+        driveController.getButton(Button.kY.value).whileHeld(new DriveDistanceCommand(drivetrain, 1.0));
+        driveController.getButton(Button.kX.value).whileHeld(new TurnAngleCommand(drivetrain, 90.0));
+        driveController.getButton(Button.kB.value).whileHeld(new DriveDistanceProfiledCommand(drivetrain, 1.0));
     }
 
     /**

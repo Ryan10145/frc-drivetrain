@@ -4,14 +4,17 @@ import com.revrobotics.CANEncoder;
 import com.revrobotics.CANPIDController;
 import com.revrobotics.CANSparkMax;
 import com.revrobotics.ControlType;
+import com.revrobotics.CANPIDController.ArbFFUnits;
 import com.revrobotics.CANSparkMax.IdleMode;
 import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.controller.PIDController;
 import edu.wpi.first.wpilibj.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.kinematics.DifferentialDriveKinematics;
 import edu.wpi.first.wpilibj.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj.trajectory.TrapezoidProfile;
 import edu.wpi.first.wpiutil.math.MathUtil;
 import frc.robot.util.ArcadeDrive;
 import frc.robot.util.Gyro;
@@ -36,6 +39,9 @@ public class Drivetrain extends SnailSubsystem {
     private PIDController distancePIDController;
     private PIDController anglePIDController;
 
+    private TrapezoidProfile distanceProfile;
+    private Timer pathTimer; // measures how far along we are on our current profile / trajectory
+
     private DifferentialDriveKinematics driveKinematics;
 
     /**
@@ -43,24 +49,24 @@ public class Drivetrain extends SnailSubsystem {
      * VELOCITY_DRIVE - linearly converts joystick inputs into real world values and achieves them with velocity PID
      * DRIVE_DIST - uses position PID on distance and kP on angle to drive in a straight line a certain distance
      * TURN_ANGLE - uses position PID on angle to turn to a specific angle
+     * DRIVE_DIST_PROFILE - uses a motion profile to drive in a straight line a certain distance
      */
     public enum State {
         MANUAL_DRIVE,
         VELOCITY_DRIVE,
         DRIVE_DIST,
         TURN_ANGLE,
-        DRIVE_DIST_PROFILE
+        DRIVE_DIST_PROFILED
     }
     private final State defaultState = State.MANUAL_DRIVE;
     private State state = defaultState;
 
     /**
      * If in manual drive, these values are between -1.0 and 1.0
-     * If in velocity drive, these values are in m/s and rad/s
+     * If in velocity drive, these values are in m/s and deg/s
      */
     private double speedForward;
     private double speedTurn;
-    
     
     private double distSetpoint; // current distance setpoint in meters
     private double angleSetpoint; // current angle setpoint in deg
@@ -130,10 +136,10 @@ public class Drivetrain extends SnailSubsystem {
         leftPIDController = frontLeftMotor.getPIDController();
         rightPIDController = frontRightMotor.getPIDController();
 
-        leftPIDController.setP(DRIVE_VEL_LEFT_P);
-        leftPIDController.setFF(DRIVE_VEL_LEFT_F);
-        rightPIDController.setP(DRIVE_VEL_RIGHT_P);
-        rightPIDController.setFF(DRIVE_VEL_RIGHT_F);
+        leftPIDController.setP(DRIVE_VEL_LEFT_P, DRIVE_VEL_SLOT);
+        leftPIDController.setFF(DRIVE_VEL_LEFT_F, DRIVE_VEL_SLOT);
+        rightPIDController.setP(DRIVE_VEL_RIGHT_P, DRIVE_VEL_SLOT);
+        rightPIDController.setFF(DRIVE_VEL_RIGHT_F, DRIVE_VEL_SLOT);
 
         // configure drive distance PID controllers
         distancePIDController = new PIDController(DRIVE_DIST_PID[0], DRIVE_DIST_PID[1], DRIVE_DIST_PID[2], UPDATE_PERIOD);
@@ -147,6 +153,8 @@ public class Drivetrain extends SnailSubsystem {
 
     public void reset() {
         state = defaultState;
+        pathTimer.stop();
+        pathTimer.reset();
         reverseEnabled = false;
         slowTurnEnabled = false;
         distSetpoint = defaultSetpoint;
@@ -171,11 +179,11 @@ public class Drivetrain extends SnailSubsystem {
                 double adjustedSpeedTurn = slowTurnEnabled ? speedTurn * DRIVE_SLOW_TURN_MULT : speedTurn;
 
                 // apply negative sign to turn speed because WPILib uses left as positive
-                ChassisSpeeds chassisSpeeds = new ChassisSpeeds(adjustedSpeedForward, 0, -adjustedSpeedTurn);
-                DifferentialDriveWheelSpeeds driveSpeeds = driveKinematics.toWheelSpeeds(chassisSpeeds);
+                ChassisSpeeds chassisSpeeds = new ChassisSpeeds(adjustedSpeedForward, 0, Math.toRadians(-adjustedSpeedTurn));
+                DifferentialDriveWheelSpeeds wheelSpeeds = driveKinematics.toWheelSpeeds(chassisSpeeds);
 
-                leftPIDController.setReference(driveSpeeds.leftMetersPerSecond, ControlType.kVelocity);
-                rightPIDController.setReference(driveSpeeds.rightMetersPerSecond, ControlType.kVelocity);
+                leftPIDController.setReference(wheelSpeeds.leftMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT);
+                rightPIDController.setReference(wheelSpeeds.rightMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT);
                 break;
             }
             case DRIVE_DIST: {
@@ -222,11 +230,35 @@ public class Drivetrain extends SnailSubsystem {
                 frontRightMotor.set(arcadeSpeeds[1]);
                 break;
             }
-            case DRIVE_DIST_PROFILE: {
+            case DRIVE_DIST_PROFILED: {
+                if(distanceProfile == null) {
+                    state = defaultState;
+                    break;
+                }
+
+                if(distanceProfile.isFinished(pathTimer.get())) {
+                    pathTimer.stop();
+                    pathTimer.reset();
+                    distanceProfile = null;
+                    state = defaultState;
+                    break;
+                }
+
+                TrapezoidProfile.State currentState = distanceProfile.calculate(pathTimer.get());
+                ChassisSpeeds chassisSpeeds = new ChassisSpeeds(currentState.velocity, 0, 0);
+                DifferentialDriveWheelSpeeds wheelSpeeds =  driveKinematics.toWheelSpeeds(chassisSpeeds);
+
+                double positionError = currentState.position - leftEncoder.getPosition();
+
+                leftPIDController.setReference(wheelSpeeds.leftMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT,
+                    positionError * DRIVE_PROFILE_LEFT_P, ArbFFUnits.kPercentOut);
+                rightPIDController.setReference(wheelSpeeds.rightMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT,
+                    positionError * DRIVE_PROFILE_RIGHT_P, ArbFFUnits.kPercentOut);
                 break;
             }
-            default:
+            default: {
                 break;
+            }
         }
     }
 
@@ -240,12 +272,12 @@ public class Drivetrain extends SnailSubsystem {
         state = State.MANUAL_DRIVE;
     }
 
-    // speeds should be between in real life units
+    // speeds should be between in real life units (m/s and deg/s)
     // speedForward: - = backward, + = forward
     // speedTurn: - = ccw, + = cw
     public void velocityDrive(double speedForward, double speedTurn) {
         this.speedForward = speedForward;
-        this.speedTurn = -speedTurn;
+        this.speedTurn = speedTurn;
 
         state = State.VELOCITY_DRIVE;
     }
@@ -255,8 +287,8 @@ public class Drivetrain extends SnailSubsystem {
         rightEncoder.setPosition(0);
         Gyro.getInstance().zeroRobotAngle();
         
-        this.distSetpoint = distance;
-        this.angleSetpoint = 0;
+        distSetpoint = distance;
+        angleSetpoint = 0;
         distancePIDController.reset();
 
         state = State.DRIVE_DIST;
@@ -265,10 +297,34 @@ public class Drivetrain extends SnailSubsystem {
     public void turnAngle(double angle) {
         Gyro.getInstance().zeroRobotAngle();
 
-        this.angleSetpoint = angle;
+        angleSetpoint = angle;
         anglePIDController.reset();
 
         state = State.TURN_ANGLE;
+    }
+
+    public void driveDistanceProfiled(double distance) {
+        leftEncoder.setPosition(0);
+        rightEncoder.setPosition(0);
+        Gyro.getInstance().zeroRobotAngle();
+
+        distanceProfile = new TrapezoidProfile(
+            new TrapezoidProfile.Constraints(DRIVE_TRAJ_MAX_VEL, DRIVE_TRAJ_MAX_ACC),
+            new TrapezoidProfile.State(distance, 0),
+            new TrapezoidProfile.State(0, 0)
+        );
+
+        pathTimer.reset();
+        pathTimer.start();
+
+        state = State.DRIVE_DIST_PROFILED;
+    }
+
+    public void endPID() {
+        distSetpoint = defaultSetpoint;
+        angleSetpoint = defaultSetpoint;
+        distanceProfile = null;
+        state = defaultState;
     }
     
     // toggles reverse drive
@@ -290,8 +346,9 @@ public class Drivetrain extends SnailSubsystem {
                 leftEncoder.getPosition(), rightEncoder.getPosition(),
                 leftEncoder.getVelocity(), rightEncoder.getVelocity()
             });
-            SmartDashboard.putNumberArray("Drive PID Angle", new double[] {
-                Gyro.getInstance().getRobotAngle()
+            SmartDashboard.putNumberArray("Drive Angle (pos, vel)", new double[] {
+                Gyro.getInstance().getRobotAngle(),
+                Gyro.getInstance().getRobotAngleVelocity()
             });
 
             SmartDashboard.putString("Drive State", state.name());
