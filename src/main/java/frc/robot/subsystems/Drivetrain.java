@@ -10,10 +10,16 @@ import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.controller.PIDController;
+import edu.wpi.first.wpilibj.controller.RamseteController;
+import edu.wpi.first.wpilibj.estimator.DifferentialDrivePoseEstimator;
+import edu.wpi.first.wpilibj.geometry.Pose2d;
+import edu.wpi.first.wpilibj.geometry.Rotation2d;
 import edu.wpi.first.wpilibj.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.kinematics.DifferentialDriveKinematics;
+import edu.wpi.first.wpilibj.kinematics.DifferentialDriveOdometry;
 import edu.wpi.first.wpilibj.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj.trajectory.Trajectory;
 import edu.wpi.first.wpilibj.trajectory.TrapezoidProfile;
 import edu.wpi.first.wpiutil.math.MathUtil;
 import frc.robot.util.ArcadeDrive;
@@ -40,9 +46,12 @@ public class Drivetrain extends SnailSubsystem {
     private PIDController anglePIDController;
 
     private TrapezoidProfile distanceProfile;
+    private RamseteController ramseteController;
+    private Trajectory trajectory;
     private Timer pathTimer; // measures how far along we are on our current profile / trajectory
 
     private DifferentialDriveKinematics driveKinematics;
+    private DifferentialDriveOdometry driveOdometry;
 
     /**
      * MANUAL_DRIVE - uses joystick inputs as direct inputs into an arcade drive setup
@@ -50,16 +59,18 @@ public class Drivetrain extends SnailSubsystem {
      * DRIVE_DIST - uses position PID on distance and kP on angle to drive in a straight line a certain distance
      * TURN_ANGLE - uses position PID on angle to turn to a specific angle
      * DRIVE_DIST_PROFILE - uses a motion profile to drive in a straight line a certain distance
+     * TRAJECTORY - uses ramsete controller to follow a PathWeaver trajectory
      */
     public enum State {
         MANUAL_DRIVE,
         VELOCITY_DRIVE,
         DRIVE_DIST,
         TURN_ANGLE,
-        DRIVE_DIST_PROFILED
+        DRIVE_DIST_PROFILED,
+        TRAJECTORY
     }
-    private final State defaultState = State.MANUAL_DRIVE;
-    private State state = defaultState;
+    private State defaultState = State.MANUAL_DRIVE;
+    private State state = defaultState; // stores the current driving mode of the drivetrain
 
     /**
      * If in manual drive, these values are between -1.0 and 1.0
@@ -85,7 +96,11 @@ public class Drivetrain extends SnailSubsystem {
         configureEncoders();
         configurePID();
 
+        ramseteController = new RamseteController(DRIVE_TRAJ_RAMSETE_B, DRIVE_TRAJ_RAMSETE_ZETA);
+
         driveKinematics = new DifferentialDriveKinematics(DRIVE_TRACK_WIDTH_M);
+        // - to make + be ccw
+        driveOdometry = new DifferentialDriveOdometry(Rotation2d.fromDegrees(-Gyro.getInstance().getRobotAngle()));
 
         reset();
     }
@@ -153,6 +168,8 @@ public class Drivetrain extends SnailSubsystem {
 
     public void reset() {
         state = defaultState;
+        distanceProfile = null;
+        trajectory = null;
         pathTimer.stop();
         pathTimer.reset();
         reverseEnabled = false;
@@ -256,10 +273,35 @@ public class Drivetrain extends SnailSubsystem {
                     positionError * DRIVE_PROFILE_RIGHT_P, ArbFFUnits.kPercentOut);
                 break;
             }
+            case TRAJECTORY: {
+                if(trajectory == null) {
+                    state = defaultState;
+                    break;
+                }
+
+                if(pathTimer.get() > trajectory.getTotalTimeSeconds()) {
+                    pathTimer.stop();
+                    pathTimer.reset();
+                    trajectory = null;
+                    state = defaultState;
+                    break;
+                }
+
+                Trajectory.State currentState = trajectory.sample(pathTimer.get());
+                ChassisSpeeds chassisSpeeds = ramseteController.calculate(driveOdometry.getPoseMeters(), currentState);
+                DifferentialDriveWheelSpeeds wheelSpeeds = driveKinematics.toWheelSpeeds(chassisSpeeds);
+
+                leftPIDController.setReference(wheelSpeeds.leftMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT);
+                rightPIDController.setReference(wheelSpeeds.rightMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT);
+                break;
+            }
             default: {
                 break;
             }
         }
+
+        driveOdometry.update(Rotation2d.fromDegrees(-Gyro.getInstance().getRobotAngle()), leftEncoder.getPosition(),
+            rightEncoder.getPosition());
     }
 
     // speeds should be between -1.0 and 1.0 and should NOT be squared before being passed in
@@ -269,6 +311,7 @@ public class Drivetrain extends SnailSubsystem {
         this.speedForward = speedForward;
         this.speedTurn = speedTurn;
 
+        defaultState = State.MANUAL_DRIVE;
         state = State.MANUAL_DRIVE;
     }
 
@@ -279,6 +322,7 @@ public class Drivetrain extends SnailSubsystem {
         this.speedForward = speedForward;
         this.speedTurn = speedTurn;
 
+        defaultState = State.VELOCITY_DRIVE;
         state = State.VELOCITY_DRIVE;
     }
 
@@ -318,6 +362,23 @@ public class Drivetrain extends SnailSubsystem {
         pathTimer.start();
 
         state = State.DRIVE_DIST_PROFILED;
+    }
+
+    public void driveTrajectory(Trajectory trajectory) {
+        setRobotPose(trajectory.getInitialPose());
+
+        this.trajectory = trajectory;
+
+        pathTimer.reset();
+        pathTimer.start();
+
+        state = State.TRAJECTORY;
+    }
+
+    private void setRobotPose(Pose2d pose) {
+        driveOdometry.resetPosition(pose, Rotation2d.fromDegrees(-Gyro.getInstance().getRobotAngle()));
+        leftEncoder.setPosition(0);
+        rightEncoder.setPosition(0);
     }
 
     public void endPID() {
@@ -364,8 +425,6 @@ public class Drivetrain extends SnailSubsystem {
 
         SmartDashboard.putNumber("Drive Traj Max Vel", DRIVE_TRAJ_MAX_VEL);
         SmartDashboard.putNumber("Drive Traj Max Acc", DRIVE_TRAJ_MAX_ACC);
-        SmartDashboard.putNumber("Drive Traj Rams B", DRIVE_TRAJ_RAMSETE_B);
-        SmartDashboard.putNumber("Drive Traj Rams Z", DRIVE_TRAJ_RAMSETE_ZETA);
         
         SmartDashboard.putNumber("Drive Dist kP", DRIVE_DIST_PID[0]);
         SmartDashboard.putNumber("Drive Dist kI", DRIVE_DIST_PID[1]);
@@ -396,8 +455,6 @@ public class Drivetrain extends SnailSubsystem {
 
         DRIVE_TRAJ_MAX_VEL = SmartDashboard.getNumber("Drive Traj Max Vel", DRIVE_TRAJ_MAX_VEL);
         DRIVE_TRAJ_MAX_ACC = SmartDashboard.getNumber("Drive Traj Max Acc", DRIVE_TRAJ_MAX_ACC);
-        DRIVE_TRAJ_RAMSETE_B = SmartDashboard.getNumber("Drive Traj Rams B", DRIVE_TRAJ_RAMSETE_B);
-        DRIVE_TRAJ_RAMSETE_ZETA = SmartDashboard.getNumber("Drive Traj Rams Z", DRIVE_TRAJ_RAMSETE_ZETA);
         
         DRIVE_DIST_PID[0] = SmartDashboard.getNumber("Drive Dist kP", DRIVE_DIST_PID[0]);
         DRIVE_DIST_PID[1] = SmartDashboard.getNumber("Drive Dist kI", DRIVE_DIST_PID[1]);

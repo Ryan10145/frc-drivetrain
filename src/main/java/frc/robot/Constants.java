@@ -37,7 +37,7 @@ public final class Constants {
 
         // closed loop driving
         public static double DRIVE_CLOSED_MAX_VEL = 3.5; // m/s
-        public static double DRIVE_CLOSED_MAX_ROT = 3.0; // rad/s
+        public static double DRIVE_CLOSED_MAX_ROT = 100.0; // deg/s
         public static double DRIVE_CLOSED_MAX_ACC = 1.25; // m/s^2
         
         // trajectory following
