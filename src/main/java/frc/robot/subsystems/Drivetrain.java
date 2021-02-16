@@ -11,7 +11,6 @@ import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.controller.PIDController;
 import edu.wpi.first.wpilibj.controller.RamseteController;
-import edu.wpi.first.wpilibj.estimator.DifferentialDrivePoseEstimator;
 import edu.wpi.first.wpilibj.geometry.Pose2d;
 import edu.wpi.first.wpilibj.geometry.Rotation2d;
 import edu.wpi.first.wpilibj.kinematics.ChassisSpeeds;
@@ -90,6 +89,9 @@ public class Drivetrain extends SnailSubsystem {
     
     // if enabled, makes turning much slower to make the robot more precise
     private boolean slowTurnEnabled;
+
+    private double testingTargetLeftSpeed;
+    private double testingTargetRightSpeed;
 
     public Drivetrain() {
         configureMotors();
@@ -201,6 +203,10 @@ public class Drivetrain extends SnailSubsystem {
 
                 leftPIDController.setReference(wheelSpeeds.leftMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT);
                 rightPIDController.setReference(wheelSpeeds.rightMetersPerSecond, ControlType.kVelocity, DRIVE_VEL_SLOT);
+
+                // for testing output
+                testingTargetLeftSpeed = wheelSpeeds.leftMetersPerSecond;
+                testingTargetRightSpeed = wheelSpeeds.rightMetersPerSecond;
                 break;
             }
             case DRIVE_DIST: {
@@ -403,6 +409,47 @@ public class Drivetrain extends SnailSubsystem {
         SmartDashboard.putBooleanArray("Drive Toggles", new boolean[] {reverseEnabled, slowTurnEnabled});
         
         if(SmartDashboard.getBoolean("Testing", false)) {
+            switch(state) {
+                case MANUAL_DRIVE:
+                    // do nothing
+                    break;
+                case VELOCITY_DRIVE:
+                    SmartDashboard.putNumberArray("Drive Velocity PID (Lv, Rv, Ls, Rs)", new double[] {
+                        leftEncoder.getVelocity(), rightEncoder.getVelocity(),
+                        testingTargetLeftSpeed, testingTargetRightSpeed
+                    });
+                    break;
+                case DRIVE_DIST:
+                    SmartDashboard.putNumberArray("Drive Dist PID (pos, set)", new double[] {
+                        leftEncoder.getPosition(), distSetpoint
+                    });
+                    break;
+                case TURN_ANGLE:
+                    SmartDashboard.putNumberArray("Drive Angle PID (pos, set)", new double[] {
+                        Gyro.getInstance().getRobotAngle(), angleSetpoint
+                    });
+                    break;
+                case DRIVE_DIST_PROFILED:
+                    SmartDashboard.putNumberArray("Drive Velocity PID (Lv, Rv, Ls, Rs)", new double[] {
+                        leftEncoder.getVelocity(), rightEncoder.getVelocity(),
+                        testingTargetLeftSpeed, testingTargetRightSpeed
+                    });
+                    SmartDashboard.putNumberArray("Drive Dist PID (pos, set)", new double[] {
+                        leftEncoder.getPosition(), distSetpoint
+                    });
+                    SmartDashboard.putNumber("Path Time Left", distanceProfile.totalTime() - pathTimer.get());
+                    break;
+                case TRAJECTORY:
+                    SmartDashboard.putNumberArray("Drive Velocity PID (Lv, Rv, Ls, Rs)", new double[] {
+                        leftEncoder.getVelocity(), rightEncoder.getVelocity(),
+                        testingTargetLeftSpeed, testingTargetRightSpeed
+                    });
+                    SmartDashboard.putNumber("Path Time Left", trajectory.getTotalTimeSeconds() - pathTimer.get());
+                    break;
+                default:
+                    break;
+            }
+
             SmartDashboard.putNumberArray("Drive Encoders (Lp, Rp, Lv, Rv)", new double[] {
                 leftEncoder.getPosition(), rightEncoder.getPosition(),
                 leftEncoder.getVelocity(), rightEncoder.getVelocity()
