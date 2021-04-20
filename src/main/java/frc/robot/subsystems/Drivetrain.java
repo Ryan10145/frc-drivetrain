@@ -458,6 +458,10 @@ public class Drivetrain extends SnailSubsystem {
                 Gyro.getInstance().getRobotAngle(),
                 Gyro.getInstance().getRobotAngleVelocity()
             });
+            SmartDashboard.putNumberArray("Drive Odometry (x, y)", new double[] {
+                driveOdometry.getPoseMeters().getX(),
+                driveOdometry.getPoseMeters().getY()
+            });
 
             SmartDashboard.putString("Drive State", state.name());
         }
